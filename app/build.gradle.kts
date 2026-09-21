@@ -43,3 +43,7 @@ android {
         jvmTarget = "17"
     }
 }
+
+dependencies {
+    implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.2.0")
+}

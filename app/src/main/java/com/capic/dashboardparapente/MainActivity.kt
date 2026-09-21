@@ -14,10 +14,12 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import android.widget.ProgressBar
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 
 class MainActivity : Activity() {
     private lateinit var webView: WebView
     private lateinit var loadingIndicator: ProgressBar
+    private lateinit var swipeRefreshLayout: SwipeRefreshLayout
     private lateinit var rootView: FrameLayout
     private var fullscreenVideoView: View? = null
     private var fullscreenVideoCallback: WebChromeClient.CustomViewCallback? = null
@@ -29,6 +31,8 @@ class MainActivity : Activity() {
         rootView = findViewById(R.id.root_view)
         webView = findViewById(R.id.dashboard_web_view)
         loadingIndicator = findViewById(R.id.loading_indicator)
+        swipeRefreshLayout = findViewById(R.id.swipe_refresh_layout)
+        swipeRefreshLayout.setOnRefreshListener { webView.reload() }
         configureWebView()
 
         if (savedInstanceState == null) {
@@ -52,6 +56,20 @@ class MainActivity : Activity() {
         webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
 
         webView.webViewClient = object : WebViewClient() {
+            override fun onPageFinished(view: WebView, url: String) {
+                swipeRefreshLayout.isRefreshing = false
+            }
+
+            override fun onReceivedError(
+                view: WebView,
+                request: WebResourceRequest,
+                error: android.webkit.WebResourceError,
+            ) {
+                if (request.isForMainFrame) {
+                    swipeRefreshLayout.isRefreshing = false
+                }
+            }
+
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val url = request.url
                 return if (url.host == DASHBOARD_HOST && url.scheme == "https") {
