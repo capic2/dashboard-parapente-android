@@ -11,20 +11,28 @@ android {
         applicationId = "com.capic.dashboardparapente"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
+        versionCode = providers.gradleProperty("VERSION_CODE").orElse("1").get().toInt()
         versionName = "1.0.0"
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            val releaseStoreFile = providers.gradleProperty("RELEASE_STORE_FILE").orNull
+            val releaseStoreFile = providers.environmentVariable("ANDROID_KEYSTORE_FILE")
+                .orElse(providers.gradleProperty("RELEASE_STORE_FILE"))
+                .orNull
             if (releaseStoreFile != null) {
                 signingConfig = signingConfigs.create("release") {
                     storeFile = file(releaseStoreFile)
-                    storePassword = providers.gradleProperty("RELEASE_STORE_PASSWORD").get()
-                    keyAlias = providers.gradleProperty("RELEASE_KEY_ALIAS").get()
-                    keyPassword = providers.gradleProperty("RELEASE_KEY_PASSWORD").get()
+                    storePassword = providers.environmentVariable("ANDROID_KEYSTORE_PASSWORD")
+                        .orElse(providers.gradleProperty("RELEASE_STORE_PASSWORD"))
+                        .get()
+                    keyAlias = providers.environmentVariable("ANDROID_KEY_ALIAS")
+                        .orElse(providers.gradleProperty("RELEASE_KEY_ALIAS"))
+                        .get()
+                    keyPassword = providers.environmentVariable("ANDROID_KEY_PASSWORD")
+                        .orElse(providers.gradleProperty("RELEASE_KEY_PASSWORD"))
+                        .get()
                 }
             }
             proguardFiles(
