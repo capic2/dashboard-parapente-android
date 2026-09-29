@@ -15,6 +15,7 @@ import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import android.widget.ProgressBar
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+import java.util.Locale
 
 class MainActivity : Activity() {
     private lateinit var webView: WebView
@@ -23,6 +24,7 @@ class MainActivity : Activity() {
     private lateinit var rootView: FrameLayout
     private var fullscreenVideoView: View? = null
     private var fullscreenVideoCallback: WebChromeClient.CustomViewCallback? = null
+    private var touchInProgress = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -35,6 +37,37 @@ class MainActivity : Activity() {
         swipeRefreshLayout.setOnRefreshListener { webView.reload() }
         swipeRefreshLayout.setOnChildScrollUpCallback { _, _ ->
             webView.canScrollVertically(-1)
+        }
+        webView.setOnTouchListener { _, event ->
+            when (event.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    touchInProgress = true
+                    swipeRefreshLayout.isEnabled = false
+                    swipeRefreshLayout.requestDisallowInterceptTouchEvent(true)
+
+                    val x = event.x / webView.scale
+                    val y = event.y / webView.scale
+                    webView.evaluateJavascript(
+                        String.format(Locale.US, NESTED_SCROLL_TARGET_SCRIPT, x, y),
+                    ) { result ->
+                        if (touchInProgress) {
+                            val startedInNestedScroll = result == "\"nested\""
+                            swipeRefreshLayout.isEnabled = !startedInNestedScroll
+                            swipeRefreshLayout.requestDisallowInterceptTouchEvent(
+                                startedInNestedScroll,
+                            )
+                        }
+                    }
+                }
+
+                android.view.MotionEvent.ACTION_UP,
+                android.view.MotionEvent.ACTION_CANCEL -> {
+                    touchInProgress = false
+                    swipeRefreshLayout.isEnabled = true
+                    swipeRefreshLayout.requestDisallowInterceptTouchEvent(false)
+                }
+            }
+            false
         }
         configureWebView()
 
@@ -154,5 +187,18 @@ class MainActivity : Activity() {
     private companion object {
         const val DASHBOARD_URL = "https://parapente.capic.ignorelist.com"
         const val DASHBOARD_HOST = "parapente.capic.ignorelist.com"
+        const val NESTED_SCROLL_TARGET_SCRIPT = """
+            (function(x, y) {
+                let element = document.elementFromPoint(x, y);
+                while (element && element !== document.body && element !== document.documentElement) {
+                    const style = window.getComputedStyle(element);
+                    const scrollable = element.scrollHeight > element.clientHeight + 1 &&
+                        /(auto|scroll|overlay)/.test(style.overflowY);
+                    if (scrollable) return "nested";
+                    element = element.parentElement;
+                }
+                return "root";
+            })(%f, %f)
+        """
     }
 }
