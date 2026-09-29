@@ -33,6 +33,9 @@ class MainActivity : Activity() {
         loadingIndicator = findViewById(R.id.loading_indicator)
         swipeRefreshLayout = findViewById(R.id.swipe_refresh_layout)
         swipeRefreshLayout.setOnRefreshListener { webView.reload() }
+        swipeRefreshLayout.setOnChildScrollUpCallback { _, _ ->
+            webView.canScrollVertically(-1)
+        }
         configureWebView()
 
         if (savedInstanceState == null) {
