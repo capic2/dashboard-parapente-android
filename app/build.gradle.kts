@@ -11,8 +11,8 @@ android {
         applicationId = "com.capic.dashboardparapente"
         minSdk = 26
         targetSdk = 35
-        versionCode = providers.gradleProperty("VERSION_CODE").orElse("1").get().toInt()
-        versionName = "1.0.0"
+        versionCode = providers.gradleProperty("VERSION_CODE").orElse("4").get().toInt()
+        versionName = "1.0.4"
     }
 
     buildTypes {
