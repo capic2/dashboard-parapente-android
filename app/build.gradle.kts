@@ -12,7 +12,7 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = providers.gradleProperty("VERSION_CODE").orElse("4").get().toInt()
-        versionName = "1.0.4"
+        versionName = "1.0.6"
     }
 
     buildTypes {
