@@ -1,8 +1,9 @@
 package com.capic.dashboardparapente
 
 import android.app.Activity
-import android.content.pm.PackageManager
 import android.content.Intent
+import android.content.pm.ActivityInfo
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.view.View
@@ -26,6 +27,7 @@ class MainActivity : Activity() {
     private lateinit var rootView: FrameLayout
     private var fullscreenVideoView: View? = null
     private var fullscreenVideoCallback: WebChromeClient.CustomViewCallback? = null
+    private var orientationBeforeFullscreen: Int? = null
     private var touchInProgress = false
     private var pendingGeolocationCallback: GeolocationPermissions.Callback? = null
     private var pendingGeolocationOrigin: String? = null
@@ -163,6 +165,8 @@ class MainActivity : Activity() {
 
                 fullscreenVideoView = view
                 fullscreenVideoCallback = callback
+                orientationBeforeFullscreen = requestedOrientation
+                requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
                 rootView.addView(
                     view,
                     FrameLayout.LayoutParams(
@@ -217,6 +221,8 @@ class MainActivity : Activity() {
         fullscreenVideoView = null
         fullscreenVideoCallback?.onCustomViewHidden()
         fullscreenVideoCallback = null
+        orientationBeforeFullscreen?.let { requestedOrientation = it }
+        orientationBeforeFullscreen = null
         webView.visibility = View.VISIBLE
         window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
     }
