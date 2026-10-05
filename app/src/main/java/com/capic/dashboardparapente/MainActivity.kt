@@ -331,20 +331,22 @@ class MainActivity : Activity() {
                 if (!bridge || !original || original.__dashboardVideoOrientationWrapped) return;
 
                 const wrapped = function(options) {
-                    try {
-                        bridge.prepareLandscape();
-                    } catch (error) {
-                        // Keep the fullscreen request tied to the original user tap.
-                    }
-
                     let request;
                     try {
+                        // Request fullscreen before crossing the JavaScript bridge so Android
+                        // still sees the user's original tap as the activation for this call.
                         request = original.call(this, options);
                     } catch (error) {
                         try {
                             bridge.cancelLandscape();
                         } catch (bridgeError) {}
                         throw error;
+                    }
+
+                    try {
+                        bridge.prepareLandscape();
+                    } catch (error) {
+                        // The native fullscreen callback also requests landscape as a fallback.
                     }
 
                     return Promise.resolve(request).catch(function(error) {
