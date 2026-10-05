@@ -8,6 +8,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -26,12 +27,12 @@ class MainActivity : Activity() {
     private lateinit var webView: WebView
     private lateinit var loadingIndicator: ProgressBar
     private lateinit var swipeRefreshLayout: SwipeRefreshLayout
-    private lateinit var rootView: FrameLayout
     private var fullscreenVideoView: View? = null
     private var fullscreenVideoCallback: WebChromeClient.CustomViewCallback? = null
     private var orientationBeforeFullscreen: Int? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private var pendingOrientationRestore: Runnable? = null
+    private var pendingFullscreenOrientation: Runnable? = null
     private var touchInProgress = false
     private var pendingGeolocationCallback: GeolocationPermissions.Callback? = null
     private var pendingGeolocationOrigin: String? = null
@@ -40,7 +41,6 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        rootView = findViewById(R.id.root_view)
         webView = findViewById(R.id.dashboard_web_view)
         loadingIndicator = findViewById(R.id.loading_indicator)
         swipeRefreshLayout = findViewById(R.id.swipe_refresh_layout)
@@ -173,20 +173,17 @@ class MainActivity : Activity() {
                 }
                 fullscreenVideoView = view
                 fullscreenVideoCallback = callback
-                rootView.addView(
+                window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+                window.addContentView(
                     view,
                     FrameLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT,
+                        Gravity.CENTER,
                     ),
                 )
                 loadingIndicator.visibility = View.GONE
-                window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
-                view.post {
-                    if (fullscreenVideoView === view) {
-                        prepareFullscreenOrientation()
-                    }
-                }
+                scheduleFullscreenOrientation(view)
             }
 
             override fun onHideCustomView() {
@@ -228,7 +225,8 @@ class MainActivity : Activity() {
 
     private fun hideFullscreenVideo(restoreOrientationAfterDelay: Boolean = true) {
         val view = fullscreenVideoView ?: return
-        rootView.removeView(view)
+        cancelPendingFullscreenOrientation()
+        (view.parent as? ViewGroup)?.removeView(view)
         fullscreenVideoView = null
         fullscreenVideoCallback?.onCustomViewHidden()
         fullscreenVideoCallback = null
@@ -243,11 +241,33 @@ class MainActivity : Activity() {
     }
 
     private fun prepareFullscreenOrientation() {
+        cancelPendingFullscreenOrientation()
         cancelPendingOrientationRestore()
         if (orientationBeforeFullscreen == null) {
             orientationBeforeFullscreen = requestedOrientation
         }
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+    }
+
+    private fun scheduleFullscreenOrientation(view: View) {
+        cancelPendingFullscreenOrientation()
+        val requestOrientation = Runnable {
+            pendingFullscreenOrientation = null
+            if (fullscreenVideoView === view) {
+                prepareFullscreenOrientation()
+            }
+        }
+        pendingFullscreenOrientation = requestOrientation
+        view.post {
+            if (pendingFullscreenOrientation === requestOrientation) {
+                mainHandler.postDelayed(requestOrientation, FULLSCREEN_ORIENTATION_DELAY_MS)
+            }
+        }
+    }
+
+    private fun cancelPendingFullscreenOrientation() {
+        pendingFullscreenOrientation?.let(mainHandler::removeCallbacks)
+        pendingFullscreenOrientation = null
     }
 
     private fun scheduleOrientationRestore() {
@@ -289,6 +309,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        cancelPendingFullscreenOrientation()
         cancelPendingOrientationRestore()
         hideFullscreenVideo(restoreOrientationAfterDelay = false)
         orientationBeforeFullscreen = null
@@ -300,6 +321,7 @@ class MainActivity : Activity() {
         const val DASHBOARD_URL = "https://parapente.capic.ignorelist.com"
         const val DASHBOARD_HOST = "parapente.capic.ignorelist.com"
         const val LOCATION_PERMISSION_REQUEST_CODE = 1001
+        const val FULLSCREEN_ORIENTATION_DELAY_MS = 250L
         const val ORIENTATION_RESTORE_DELAY_MS = 800L
         const val NESTED_SCROLL_TARGET_SCRIPT = """
             (function(x, y) {
