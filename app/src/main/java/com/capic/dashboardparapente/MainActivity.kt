@@ -10,7 +10,6 @@ import android.os.Bundle
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.view.ViewTreeObserver
 import android.view.WindowManager
 import android.webkit.CookieManager
 import android.webkit.GeolocationPermissions
@@ -35,7 +34,6 @@ class MainActivity : Activity() {
     private var nativeFullscreenOrientationBefore: Int? = null
     private var nativeFullscreenUiVisibilityBefore: Int? = null
     private var pendingFullscreenLandscape: Boolean? = null
-    private var fullscreenOrientationLayoutListener: ViewTreeObserver.OnGlobalLayoutListener? = null
     private var touchInProgress = false
     private var pendingGeolocationCallback: GeolocationPermissions.Callback? = null
     private var pendingGeolocationOrigin: String? = null
@@ -250,7 +248,10 @@ class MainActivity : Activity() {
         super.onConfigurationChanged(newConfig)
         webView.invalidate()
         webView.requestLayout()
-        notifyFullscreenOrientationWhenLaidOut()
+        window.decorView.requestLayout()
+        window.decorView.postOnAnimation {
+            notifyFullscreenOrientationWhenLaidOut()
+        }
     }
 
     private fun enterNativeFullscreen() {
@@ -268,7 +269,7 @@ class MainActivity : Activity() {
                 View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
         pendingFullscreenLandscape = true
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-        webView.post { notifyFullscreenOrientationWhenLaidOut() }
+        webView.postOnAnimation { notifyFullscreenOrientationWhenLaidOut() }
     }
 
     private fun exitNativeFullscreen() {
@@ -283,40 +284,28 @@ class MainActivity : Activity() {
             window.decorView.systemUiVisibility = visibility
         }
         nativeFullscreenUiVisibilityBefore = null
-        webView.post { notifyFullscreenOrientationWhenLaidOut() }
+        webView.postOnAnimation { notifyFullscreenOrientationWhenLaidOut() }
     }
 
     private fun notifyFullscreenOrientationWhenLaidOut() {
         val targetLandscape = pendingFullscreenLandscape ?: return
-        val orientationMatches = if (targetLandscape) {
-            webView.width > webView.height
-        } else {
-            webView.height >= webView.width
-        }
-        if (orientationMatches) {
-            fullscreenOrientationLayoutListener?.let { listener ->
-                webView.viewTreeObserver.removeOnGlobalLayoutListener(listener)
-            }
-            fullscreenOrientationLayoutListener = null
-            pendingFullscreenLandscape = null
-            val isLandscape = targetLandscape
-            webView.evaluateJavascript(
-                "window.dispatchEvent(new CustomEvent('nativefullscreenorientationchange', { detail: { landscape: $isLandscape } }))",
-                null,
-            )
-            return
-        }
+        val actualLandscape = resources.configuration.orientation ==
+            Configuration.ORIENTATION_LANDSCAPE
+        if (actualLandscape == targetLandscape) {
+            webView.postOnAnimation {
+                if (pendingFullscreenLandscape != targetLandscape) return@postOnAnimation
+                val stillLandscape = resources.configuration.orientation ==
+                    Configuration.ORIENTATION_LANDSCAPE
+                if (stillLandscape != targetLandscape) return@postOnAnimation
 
-        if (fullscreenOrientationLayoutListener != null) return
-        val observer = webView.viewTreeObserver
-        val listener = object : ViewTreeObserver.OnGlobalLayoutListener {
-            override fun onGlobalLayout() {
-                if (!observer.isAlive) return
-                notifyFullscreenOrientationWhenLaidOut()
+                pendingFullscreenLandscape = null
+                val isLandscape = targetLandscape
+                webView.evaluateJavascript(
+                    "window.dispatchEvent(new CustomEvent('nativefullscreenorientationchange', { detail: { landscape: $isLandscape } }))",
+                    null,
+                )
             }
         }
-        fullscreenOrientationLayoutListener = listener
-        observer.addOnGlobalLayoutListener(listener)
     }
 
     private fun isDashboardPageLoaded(): Boolean =
