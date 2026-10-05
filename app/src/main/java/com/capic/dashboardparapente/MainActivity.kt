@@ -6,14 +6,13 @@ import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.CookieManager
 import android.webkit.GeolocationPermissions
+import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
@@ -31,10 +30,7 @@ class MainActivity : Activity() {
     private var fullscreenVideoCallback: WebChromeClient.CustomViewCallback? = null
     private var fullscreenUiVisibilityBefore: Int? = null
     private var orientationBeforeFullscreen: Int? = null
-    private var ignoreNextFullscreenHideForRotation = false
-    private var fullscreenRotationHideTimeout: Runnable? = null
-    private val mainHandler = Handler(Looper.getMainLooper())
-    private var pendingLandscapePresentation: Runnable? = null
+    private var awaitingLandscapeFullscreenRequest = false
     private var touchInProgress = false
     private var pendingGeolocationCallback: GeolocationPermissions.Callback? = null
     private var pendingGeolocationOrigin: String? = null
@@ -102,10 +98,14 @@ class MainActivity : Activity() {
 
         CookieManager.getInstance().setAcceptCookie(true)
         webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+        webView.addJavascriptInterface(FullscreenOrientationBridge(), VIDEO_FULLSCREEN_BRIDGE_NAME)
 
         webView.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView, url: String) {
                 swipeRefreshLayout.isRefreshing = false
+                if (Uri.parse(url).host == DASHBOARD_HOST) {
+                    view.evaluateJavascript(FULLSCREEN_ORIENTATION_BRIDGE_SCRIPT, null)
+                }
             }
 
             override fun onReceivedError(
@@ -192,16 +192,9 @@ class MainActivity : Activity() {
                     ),
                 )
                 loadingIndicator.visibility = View.GONE
-                scheduleLandscapePresentation(view)
             }
 
             override fun onHideCustomView() {
-                if (ignoreNextFullscreenHideForRotation && fullscreenVideoView != null) {
-                    ignoreNextFullscreenHideForRotation = false
-                    fullscreenRotationHideTimeout?.let(mainHandler::removeCallbacks)
-                    fullscreenRotationHideTimeout = null
-                    return
-                }
                 hideFullscreenVideo()
             }
         }
@@ -241,13 +234,10 @@ class MainActivity : Activity() {
     private fun hideFullscreenVideo(notifyWebContent: Boolean = false) {
         val view = fullscreenVideoView ?: return
         val callback = fullscreenVideoCallback
-        cancelPendingLandscapePresentation()
-        ignoreNextFullscreenHideForRotation = false
-        fullscreenRotationHideTimeout?.let(mainHandler::removeCallbacks)
-        fullscreenRotationHideTimeout = null
         (view.parent as? ViewGroup)?.removeView(view)
         fullscreenVideoView = null
         fullscreenVideoCallback = null
+        awaitingLandscapeFullscreenRequest = false
         orientationBeforeFullscreen?.let { requestedOrientation = it }
         orientationBeforeFullscreen = null
         window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
@@ -260,35 +250,48 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun scheduleLandscapePresentation(view: View) {
-        cancelPendingLandscapePresentation()
-        val presentLandscape = object : Runnable {
-            override fun run() {
-                if (pendingLandscapePresentation !== this) return
-                if (fullscreenVideoView !== view) return
-                pendingLandscapePresentation = null
-                ignoreNextFullscreenHideForRotation = true
-                requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-
-                val timeout = Runnable {
-                    ignoreNextFullscreenHideForRotation = false
-                    fullscreenRotationHideTimeout = null
-                }
-                fullscreenRotationHideTimeout = timeout
-                mainHandler.postDelayed(timeout, FULLSCREEN_ROTATION_HIDE_TIMEOUT_MS)
-            }
-        }
-        pendingLandscapePresentation = presentLandscape
-        view.post {
-            view.postOnAnimation {
-                view.postOnAnimation { presentLandscape.run() }
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        if (awaitingLandscapeFullscreenRequest &&
+            newConfig.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        ) {
+            awaitingLandscapeFullscreenRequest = false
+            webView.post {
+                webView.evaluateJavascript("window.__dashboardRequestFullscreenAfterRotation?.()", null)
             }
         }
     }
 
-    private fun cancelPendingLandscapePresentation() {
-        pendingLandscapePresentation?.let(mainHandler::removeCallbacks)
-        pendingLandscapePresentation = null
+    private inner class FullscreenOrientationBridge {
+        @JavascriptInterface
+        fun isLandscape(): Boolean =
+            isDashboardLoaded() &&
+                resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+
+        @JavascriptInterface
+        fun prepareLandscape() {
+            runOnUiThread {
+                if (!isDashboardLoaded()) return@runOnUiThread
+                if (orientationBeforeFullscreen == null) {
+                    orientationBeforeFullscreen = requestedOrientation
+                }
+                awaitingLandscapeFullscreenRequest = true
+                requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            }
+        }
+
+        @JavascriptInterface
+        fun cancelLandscape() {
+            runOnUiThread {
+                if (!isDashboardLoaded()) return@runOnUiThread
+                awaitingLandscapeFullscreenRequest = false
+                orientationBeforeFullscreen?.let { requestedOrientation = it }
+                orientationBeforeFullscreen = null
+            }
+        }
+
+        private fun isDashboardLoaded(): Boolean =
+            Uri.parse(webView.url).host == DASHBOARD_HOST
     }
 
     private fun openExternalUrl(url: Uri) {
@@ -321,7 +324,58 @@ class MainActivity : Activity() {
         const val DASHBOARD_URL = "https://parapente.capic.ignorelist.com"
         const val DASHBOARD_HOST = "parapente.capic.ignorelist.com"
         const val LOCATION_PERMISSION_REQUEST_CODE = 1001
-        const val FULLSCREEN_ROTATION_HIDE_TIMEOUT_MS = 1500L
+        const val VIDEO_FULLSCREEN_BRIDGE_NAME = "DashboardVideoOrientation"
+        const val FULLSCREEN_ORIENTATION_BRIDGE_SCRIPT = """
+            (function() {
+                const bridge = window.$VIDEO_FULLSCREEN_BRIDGE_NAME;
+                const original = Element.prototype.requestFullscreen;
+                if (!bridge || !original || original.__dashboardOrientationWrapped) return;
+
+                const wrapped = function(options) {
+                    let alreadyLandscape = false;
+                    try { alreadyLandscape = bridge.isLandscape(); } catch (_) {}
+                    if (alreadyLandscape) return original.call(this, options);
+
+                    const target = this;
+                    return new Promise((resolve, reject) => {
+                        let settled = false;
+                        let timeout = 0;
+                        const cleanup = () => {
+                            window.removeEventListener('resize', checkOrientation);
+                            window.__dashboardRequestFullscreenAfterRotation = null;
+                            if (timeout) clearTimeout(timeout);
+                        };
+                        const request = () => {
+                            if (settled) return;
+                            settled = true;
+                            cleanup();
+                            try {
+                                Promise.resolve(original.call(target, options)).then(resolve, error => {
+                                    try { bridge.cancelLandscape(); } catch (_) {}
+                                    reject(error);
+                                });
+                            } catch (error) {
+                                try { bridge.cancelLandscape(); } catch (_) {}
+                                reject(error);
+                            }
+                        };
+                        const checkOrientation = () => {
+                            try { if (bridge.isLandscape()) request(); } catch (_) {}
+                        };
+
+                        window.__dashboardRequestFullscreenAfterRotation = request;
+                        window.addEventListener('resize', checkOrientation);
+                        timeout = setTimeout(() => {
+                            try { bridge.cancelLandscape(); } catch (_) {}
+                            reject(new DOMException('Landscape transition timed out', 'AbortError'));
+                        }, 1800);
+                        try { bridge.prepareLandscape(); } catch (_) { request(); }
+                    });
+                };
+                wrapped.__dashboardOrientationWrapped = true;
+                Element.prototype.requestFullscreen = wrapped;
+            })();
+        """.trimIndent()
         const val NESTED_SCROLL_TARGET_SCRIPT = """
             (function(x, y) {
                 let element = document.elementFromPoint(x, y);
