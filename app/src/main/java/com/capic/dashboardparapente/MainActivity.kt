@@ -13,7 +13,6 @@ import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.CookieManager
 import android.webkit.GeolocationPermissions
-import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
@@ -101,17 +100,10 @@ class MainActivity : Activity() {
 
         CookieManager.getInstance().setAcceptCookie(true)
         webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
-        webView.addJavascriptInterface(
-            VideoFullscreenBridge(),
-            VIDEO_FULLSCREEN_BRIDGE_NAME,
-        )
 
         webView.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView, url: String) {
                 swipeRefreshLayout.isRefreshing = false
-                if (isDashboardOrigin(url)) {
-                    view.evaluateJavascript(FULLSCREEN_ORIENTATION_BRIDGE_SCRIPT, null)
-                }
             }
 
             override fun onReceivedError(
@@ -271,18 +263,6 @@ class MainActivity : Activity() {
         mainHandler.postDelayed(restoreOrientation, ORIENTATION_RESTORE_DELAY_MS)
     }
 
-    private inner class VideoFullscreenBridge {
-        @JavascriptInterface
-        fun prepareLandscape() {
-            runOnUiThread { prepareFullscreenOrientation() }
-        }
-
-        @JavascriptInterface
-        fun cancelLandscape() {
-            runOnUiThread { scheduleOrientationRestore() }
-        }
-    }
-
     private fun cancelPendingOrientationRestore() {
         pendingOrientationRestore?.let(mainHandler::removeCallbacks)
         pendingOrientationRestore = null
@@ -321,43 +301,6 @@ class MainActivity : Activity() {
         const val DASHBOARD_HOST = "parapente.capic.ignorelist.com"
         const val LOCATION_PERMISSION_REQUEST_CODE = 1001
         const val ORIENTATION_RESTORE_DELAY_MS = 800L
-        const val VIDEO_FULLSCREEN_BRIDGE_NAME = "DashboardVideoOrientation"
-        val FULLSCREEN_ORIENTATION_BRIDGE_SCRIPT = """
-            (function() {
-                const bridge = window.$VIDEO_FULLSCREEN_BRIDGE_NAME;
-                const original = Element.prototype.requestFullscreen;
-                if (!bridge || !original || original.__dashboardVideoOrientationWrapped) return;
-
-                const wrapped = function(options) {
-                    let request;
-                    try {
-                        // Request fullscreen before crossing the JavaScript bridge so Android
-                        // still sees the user's original tap as the activation for this call.
-                        request = original.call(this, options);
-                    } catch (error) {
-                        try {
-                            bridge.cancelLandscape();
-                        } catch (bridgeError) {}
-                        throw error;
-                    }
-
-                    try {
-                        bridge.prepareLandscape();
-                    } catch (error) {
-                        // The native fullscreen callback also requests landscape as a fallback.
-                    }
-
-                    return Promise.resolve(request).catch(function(error) {
-                        try {
-                            bridge.cancelLandscape();
-                        } catch (bridgeError) {}
-                        throw error;
-                    });
-                };
-                wrapped.__dashboardVideoOrientationWrapped = true;
-                Element.prototype.requestFullscreen = wrapped;
-            })();
-        """.trimIndent()
         const val NESTED_SCROLL_TARGET_SCRIPT = """
             (function(x, y) {
                 let element = document.elementFromPoint(x, y);
