@@ -13,6 +13,7 @@ import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.CookieManager
 import android.webkit.GeolocationPermissions
+import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
@@ -95,15 +96,22 @@ class MainActivity : Activity() {
             domStorageEnabled = true
             loadWithOverviewMode = true
             useWideViewPort = true
-            mediaPlaybackRequiresUserGesture = true
+            mediaPlaybackRequiresUserGesture = false
         }
 
         CookieManager.getInstance().setAcceptCookie(true)
         webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+        webView.addJavascriptInterface(
+            VideoFullscreenBridge(),
+            VIDEO_FULLSCREEN_BRIDGE_NAME,
+        )
 
         webView.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView, url: String) {
                 swipeRefreshLayout.isRefreshing = false
+                if (isDashboardOrigin(url)) {
+                    view.evaluateJavascript(FULLSCREEN_ORIENTATION_BRIDGE_SCRIPT, null)
+                }
             }
 
             override fun onReceivedError(
@@ -185,7 +193,7 @@ class MainActivity : Activity() {
                 window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
                 view.post {
                     if (fullscreenVideoView === view) {
-                        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                        prepareFullscreenOrientation()
                     }
                 }
             }
@@ -241,6 +249,18 @@ class MainActivity : Activity() {
             return
         }
 
+        scheduleOrientationRestore()
+    }
+
+    private fun prepareFullscreenOrientation() {
+        cancelPendingOrientationRestore()
+        if (orientationBeforeFullscreen == null) {
+            orientationBeforeFullscreen = requestedOrientation
+        }
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+    }
+
+    private fun scheduleOrientationRestore() {
         val orientationToRestore = orientationBeforeFullscreen ?: return
         val restoreOrientation = Runnable {
             pendingOrientationRestore = null
@@ -251,6 +271,18 @@ class MainActivity : Activity() {
         }
         pendingOrientationRestore = restoreOrientation
         mainHandler.postDelayed(restoreOrientation, ORIENTATION_RESTORE_DELAY_MS)
+    }
+
+    private inner class VideoFullscreenBridge {
+        @JavascriptInterface
+        fun prepareLandscape() {
+            runOnUiThread { prepareFullscreenOrientation() }
+        }
+
+        @JavascriptInterface
+        fun cancelLandscape() {
+            runOnUiThread { scheduleOrientationRestore() }
+        }
     }
 
     private fun cancelPendingOrientationRestore() {
@@ -291,6 +323,61 @@ class MainActivity : Activity() {
         const val DASHBOARD_HOST = "parapente.capic.ignorelist.com"
         const val LOCATION_PERMISSION_REQUEST_CODE = 1001
         const val ORIENTATION_RESTORE_DELAY_MS = 800L
+        const val VIDEO_FULLSCREEN_BRIDGE_NAME = "DashboardVideoOrientation"
+        val FULLSCREEN_ORIENTATION_BRIDGE_SCRIPT = """
+            (function() {
+                const bridge = window.$VIDEO_FULLSCREEN_BRIDGE_NAME;
+                const original = Element.prototype.requestFullscreen;
+                if (!bridge || !original || original.__dashboardVideoOrientationWrapped) return;
+
+                const enterFullscreen = function(target, options, resolve, reject) {
+                    try {
+                        Promise.resolve(original.call(target, options)).then(resolve, function(error) {
+                            bridge.cancelLandscape();
+                            reject(error);
+                        });
+                    } catch (error) {
+                        bridge.cancelLandscape();
+                        reject(error);
+                    }
+                };
+
+                const wrapped = function(options) {
+                    const target = this;
+                    bridge.prepareLandscape();
+                    if (window.innerWidth > window.innerHeight) {
+                        return new Promise(function(resolve, reject) {
+                            enterFullscreen(target, options, resolve, reject);
+                        });
+                    }
+
+                    return new Promise(function(resolve, reject) {
+                        let timeoutId;
+                        let finished = false;
+                        const cleanup = function() {
+                            if (finished) return;
+                            finished = true;
+                            window.removeEventListener("resize", onResize);
+                            clearTimeout(timeoutId);
+                        };
+                        const onResize = function() {
+                            if (window.innerWidth <= window.innerHeight) return;
+                            cleanup();
+                            enterFullscreen(target, options, resolve, reject);
+                        };
+
+                        window.addEventListener("resize", onResize);
+                        timeoutId = setTimeout(function() {
+                            cleanup();
+                            enterFullscreen(target, options, resolve, reject);
+                        }, 1800);
+                        onResize();
+                    });
+                };
+                wrapped.__dashboardVideoOrientationWrapped = true;
+                Element.prototype.requestFullscreen = wrapped;
+            })();
+        """.trimIndent()
         const val NESTED_SCROLL_TARGET_SCRIPT = """
             (function(x, y) {
                 let element = document.elementFromPoint(x, y);
