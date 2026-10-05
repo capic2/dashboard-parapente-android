@@ -330,48 +330,28 @@ class MainActivity : Activity() {
                 const original = Element.prototype.requestFullscreen;
                 if (!bridge || !original || original.__dashboardVideoOrientationWrapped) return;
 
-                const enterFullscreen = function(target, options, resolve, reject) {
-                    try {
-                        Promise.resolve(original.call(target, options)).then(resolve, function(error) {
-                            bridge.cancelLandscape();
-                            reject(error);
-                        });
-                    } catch (error) {
-                        bridge.cancelLandscape();
-                        reject(error);
-                    }
-                };
-
                 const wrapped = function(options) {
-                    const target = this;
-                    bridge.prepareLandscape();
-                    if (window.innerWidth > window.innerHeight) {
-                        return new Promise(function(resolve, reject) {
-                            enterFullscreen(target, options, resolve, reject);
-                        });
+                    try {
+                        bridge.prepareLandscape();
+                    } catch (error) {
+                        // Keep the fullscreen request tied to the original user tap.
                     }
 
-                    return new Promise(function(resolve, reject) {
-                        let timeoutId;
-                        let finished = false;
-                        const cleanup = function() {
-                            if (finished) return;
-                            finished = true;
-                            window.removeEventListener("resize", onResize);
-                            clearTimeout(timeoutId);
-                        };
-                        const onResize = function() {
-                            if (window.innerWidth <= window.innerHeight) return;
-                            cleanup();
-                            enterFullscreen(target, options, resolve, reject);
-                        };
+                    let request;
+                    try {
+                        request = original.call(this, options);
+                    } catch (error) {
+                        try {
+                            bridge.cancelLandscape();
+                        } catch (bridgeError) {}
+                        throw error;
+                    }
 
-                        window.addEventListener("resize", onResize);
-                        timeoutId = setTimeout(function() {
-                            cleanup();
-                            enterFullscreen(target, options, resolve, reject);
-                        }, 1800);
-                        onResize();
+                    return Promise.resolve(request).catch(function(error) {
+                        try {
+                            bridge.cancelLandscape();
+                        } catch (bridgeError) {}
+                        throw error;
                     });
                 };
                 wrapped.__dashboardVideoOrientationWrapped = true;
