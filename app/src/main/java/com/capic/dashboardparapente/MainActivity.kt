@@ -2,6 +2,7 @@ package com.capic.dashboardparapente
 
 import android.app.Activity
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
@@ -29,6 +30,9 @@ class MainActivity : Activity() {
     private var fullscreenVideoView: View? = null
     private var fullscreenVideoCallback: WebChromeClient.CustomViewCallback? = null
     private var fullscreenUiVisibilityBefore: Int? = null
+    private var orientationBeforeFullscreen: Int? = null
+    private var ignoreNextFullscreenHideForRotation = false
+    private var fullscreenRotationHideTimeout: Runnable? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private var pendingLandscapePresentation: Runnable? = null
     private var touchInProgress = false
@@ -167,6 +171,9 @@ class MainActivity : Activity() {
 
                 fullscreenVideoView = view
                 fullscreenVideoCallback = callback
+                if (orientationBeforeFullscreen == null) {
+                    orientationBeforeFullscreen = requestedOrientation
+                }
                 fullscreenUiVisibilityBefore = window.decorView.systemUiVisibility
                 window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
                 window.decorView.systemUiVisibility =
@@ -189,6 +196,12 @@ class MainActivity : Activity() {
             }
 
             override fun onHideCustomView() {
+                if (ignoreNextFullscreenHideForRotation && fullscreenVideoView != null) {
+                    ignoreNextFullscreenHideForRotation = false
+                    fullscreenRotationHideTimeout?.let(mainHandler::removeCallbacks)
+                    fullscreenRotationHideTimeout = null
+                    return
+                }
                 hideFullscreenVideo()
             }
         }
@@ -229,16 +242,14 @@ class MainActivity : Activity() {
         val view = fullscreenVideoView ?: return
         val callback = fullscreenVideoCallback
         cancelPendingLandscapePresentation()
-        view.rotation = 0f
-        (view.layoutParams as? FrameLayout.LayoutParams)?.let { layoutParams ->
-            layoutParams.width = ViewGroup.LayoutParams.MATCH_PARENT
-            layoutParams.height = ViewGroup.LayoutParams.MATCH_PARENT
-            layoutParams.gravity = Gravity.CENTER
-            view.layoutParams = layoutParams
-        }
+        ignoreNextFullscreenHideForRotation = false
+        fullscreenRotationHideTimeout?.let(mainHandler::removeCallbacks)
+        fullscreenRotationHideTimeout = null
         (view.parent as? ViewGroup)?.removeView(view)
         fullscreenVideoView = null
         fullscreenVideoCallback = null
+        orientationBeforeFullscreen?.let { requestedOrientation = it }
+        orientationBeforeFullscreen = null
         window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
         fullscreenUiVisibilityBefore?.let { previousVisibility ->
             window.decorView.systemUiVisibility = previousVisibility
@@ -254,24 +265,17 @@ class MainActivity : Activity() {
         val presentLandscape = object : Runnable {
             override fun run() {
                 if (pendingLandscapePresentation !== this) return
-                val parent = view.parent as? ViewGroup ?: return
-                val parentWidth = parent.width
-                val parentHeight = parent.height
-                if (parentWidth <= 0 || parentHeight <= 0) {
-                    mainHandler.postDelayed(this, LANDSCAPE_LAYOUT_RETRY_DELAY_MS)
-                    return
-                }
                 if (fullscreenVideoView !== view) return
+                pendingLandscapePresentation = null
+                ignoreNextFullscreenHideForRotation = true
+                requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
 
-                val layoutParams = view.layoutParams as? FrameLayout.LayoutParams
-                    ?: FrameLayout.LayoutParams(parentHeight, parentWidth)
-                layoutParams.width = parentHeight
-                layoutParams.height = parentWidth
-                layoutParams.gravity = Gravity.CENTER
-                view.layoutParams = layoutParams
-                view.pivotX = parentHeight / 2f
-                view.pivotY = parentWidth / 2f
-                view.rotation = LANDSCAPE_VIEW_ROTATION_DEGREES
+                val timeout = Runnable {
+                    ignoreNextFullscreenHideForRotation = false
+                    fullscreenRotationHideTimeout = null
+                }
+                fullscreenRotationHideTimeout = timeout
+                mainHandler.postDelayed(timeout, FULLSCREEN_ROTATION_HIDE_TIMEOUT_MS)
             }
         }
         pendingLandscapePresentation = presentLandscape
@@ -317,8 +321,7 @@ class MainActivity : Activity() {
         const val DASHBOARD_URL = "https://parapente.capic.ignorelist.com"
         const val DASHBOARD_HOST = "parapente.capic.ignorelist.com"
         const val LOCATION_PERMISSION_REQUEST_CODE = 1001
-        const val LANDSCAPE_VIEW_ROTATION_DEGREES = 90f
-        const val LANDSCAPE_LAYOUT_RETRY_DELAY_MS = 16L
+        const val FULLSCREEN_ROTATION_HIDE_TIMEOUT_MS = 1500L
         const val NESTED_SCROLL_TARGET_SCRIPT = """
             (function(x, y) {
                 let element = document.elementFromPoint(x, y);
