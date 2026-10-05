@@ -10,6 +10,7 @@ import android.os.Bundle
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewTreeObserver
 import android.view.WindowManager
 import android.webkit.CookieManager
 import android.webkit.GeolocationPermissions
@@ -33,6 +34,8 @@ class MainActivity : Activity() {
     private var nativeFullscreenActive = false
     private var nativeFullscreenOrientationBefore: Int? = null
     private var nativeFullscreenUiVisibilityBefore: Int? = null
+    private var pendingFullscreenLandscape: Boolean? = null
+    private var fullscreenOrientationLayoutListener: ViewTreeObserver.OnGlobalLayoutListener? = null
     private var touchInProgress = false
     private var pendingGeolocationCallback: GeolocationPermissions.Callback? = null
     private var pendingGeolocationOrigin: String? = null
@@ -247,6 +250,7 @@ class MainActivity : Activity() {
         super.onConfigurationChanged(newConfig)
         webView.invalidate()
         webView.requestLayout()
+        notifyFullscreenOrientationWhenLaidOut()
     }
 
     private fun enterNativeFullscreen() {
@@ -262,12 +266,15 @@ class MainActivity : Activity() {
                 View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
                 View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
                 View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+        pendingFullscreenLandscape = true
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        webView.post { notifyFullscreenOrientationWhenLaidOut() }
     }
 
     private fun exitNativeFullscreen() {
         if (!nativeFullscreenActive) return
         nativeFullscreenActive = false
+        pendingFullscreenLandscape = false
         requestedOrientation = nativeFullscreenOrientationBefore
             ?: ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         nativeFullscreenOrientationBefore = null
@@ -276,12 +283,49 @@ class MainActivity : Activity() {
             window.decorView.systemUiVisibility = visibility
         }
         nativeFullscreenUiVisibilityBefore = null
+        webView.post { notifyFullscreenOrientationWhenLaidOut() }
+    }
+
+    private fun notifyFullscreenOrientationWhenLaidOut() {
+        val targetLandscape = pendingFullscreenLandscape ?: return
+        val orientationMatches = if (targetLandscape) {
+            webView.width > webView.height
+        } else {
+            webView.height >= webView.width
+        }
+        if (orientationMatches) {
+            fullscreenOrientationLayoutListener?.let { listener ->
+                webView.viewTreeObserver.removeOnGlobalLayoutListener(listener)
+            }
+            fullscreenOrientationLayoutListener = null
+            pendingFullscreenLandscape = null
+            val isLandscape = targetLandscape
+            webView.evaluateJavascript(
+                "window.dispatchEvent(new CustomEvent('nativefullscreenorientationchange', { detail: { landscape: $isLandscape } }))",
+                null,
+            )
+            return
+        }
+
+        if (fullscreenOrientationLayoutListener != null) return
+        val observer = webView.viewTreeObserver
+        val listener = object : ViewTreeObserver.OnGlobalLayoutListener {
+            override fun onGlobalLayout() {
+                if (!observer.isAlive) return
+                notifyFullscreenOrientationWhenLaidOut()
+            }
+        }
+        fullscreenOrientationLayoutListener = listener
+        observer.addOnGlobalLayoutListener(listener)
     }
 
     private fun isDashboardPageLoaded(): Boolean =
         Uri.parse(webView.url).let { it.scheme == "https" && it.host == DASHBOARD_HOST }
 
     inner class NativeFullscreenBridge {
+        @JavascriptInterface
+        fun supportsOrientationReady(): Boolean = true
+
         @JavascriptInterface
         fun enter() {
             runOnUiThread {
@@ -308,7 +352,6 @@ class MainActivity : Activity() {
                 "window.dispatchEvent(new Event('nativefullscreenback'))",
                 null,
             )
-            exitNativeFullscreen()
         } else if (fullscreenVideoView != null) {
             hideFullscreenVideo(notifyWebContent = true)
         } else if (webView.canGoBack()) {
