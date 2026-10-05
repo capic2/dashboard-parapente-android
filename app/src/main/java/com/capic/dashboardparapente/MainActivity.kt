@@ -6,6 +6,8 @@ import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -28,6 +30,8 @@ class MainActivity : Activity() {
     private var fullscreenVideoView: View? = null
     private var fullscreenVideoCallback: WebChromeClient.CustomViewCallback? = null
     private var orientationBeforeFullscreen: Int? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var pendingOrientationRestore: Runnable? = null
     private var touchInProgress = false
     private var pendingGeolocationCallback: GeolocationPermissions.Callback? = null
     private var pendingGeolocationOrigin: String? = null
@@ -163,9 +167,12 @@ class MainActivity : Activity() {
                     return
                 }
 
+                cancelPendingOrientationRestore()
+                if (orientationBeforeFullscreen == null) {
+                    orientationBeforeFullscreen = requestedOrientation
+                }
                 fullscreenVideoView = view
                 fullscreenVideoCallback = callback
-                orientationBeforeFullscreen = requestedOrientation
                 rootView.addView(
                     view,
                     FrameLayout.LayoutParams(
@@ -220,15 +227,35 @@ class MainActivity : Activity() {
         false
     }
 
-    private fun hideFullscreenVideo() {
-        fullscreenVideoView?.let(rootView::removeView)
+    private fun hideFullscreenVideo(restoreOrientationAfterDelay: Boolean = true) {
+        val view = fullscreenVideoView ?: return
+        rootView.removeView(view)
         fullscreenVideoView = null
         fullscreenVideoCallback?.onCustomViewHidden()
         fullscreenVideoCallback = null
-        orientationBeforeFullscreen?.let { requestedOrientation = it }
-        orientationBeforeFullscreen = null
         webView.visibility = View.VISIBLE
         window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+
+        if (!restoreOrientationAfterDelay) {
+            orientationBeforeFullscreen = null
+            return
+        }
+
+        val orientationToRestore = orientationBeforeFullscreen ?: return
+        val restoreOrientation = Runnable {
+            pendingOrientationRestore = null
+            if (fullscreenVideoView == null) {
+                requestedOrientation = orientationToRestore
+                orientationBeforeFullscreen = null
+            }
+        }
+        pendingOrientationRestore = restoreOrientation
+        mainHandler.postDelayed(restoreOrientation, ORIENTATION_RESTORE_DELAY_MS)
+    }
+
+    private fun cancelPendingOrientationRestore() {
+        pendingOrientationRestore?.let(mainHandler::removeCallbacks)
+        pendingOrientationRestore = null
     }
 
     private fun openExternalUrl(url: Uri) {
@@ -252,7 +279,9 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
-        hideFullscreenVideo()
+        cancelPendingOrientationRestore()
+        hideFullscreenVideo(restoreOrientationAfterDelay = false)
+        orientationBeforeFullscreen = null
         webView.destroy()
         super.onDestroy()
     }
@@ -261,6 +290,7 @@ class MainActivity : Activity() {
         const val DASHBOARD_URL = "https://parapente.capic.ignorelist.com"
         const val DASHBOARD_HOST = "parapente.capic.ignorelist.com"
         const val LOCATION_PERMISSION_REQUEST_CODE = 1001
+        const val ORIENTATION_RESTORE_DELAY_MS = 800L
         const val NESTED_SCROLL_TARGET_SCRIPT = """
             (function(x, y) {
                 let element = document.elementFromPoint(x, y);
