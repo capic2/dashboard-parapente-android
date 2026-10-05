@@ -325,7 +325,7 @@ class MainActivity : Activity() {
         const val DASHBOARD_HOST = "parapente.capic.ignorelist.com"
         const val LOCATION_PERMISSION_REQUEST_CODE = 1001
         const val VIDEO_FULLSCREEN_BRIDGE_NAME = "DashboardVideoOrientation"
-        const val FULLSCREEN_ORIENTATION_BRIDGE_SCRIPT = """
+        val FULLSCREEN_ORIENTATION_BRIDGE_SCRIPT = """
             (function() {
                 const bridge = window.$VIDEO_FULLSCREEN_BRIDGE_NAME;
                 const original = Element.prototype.requestFullscreen;
