@@ -223,14 +223,20 @@ class MainActivity : Activity() {
         false
     }
 
-    private fun hideFullscreenVideo(restoreOrientationAfterDelay: Boolean = true) {
+    private fun hideFullscreenVideo(
+        restoreOrientationAfterDelay: Boolean = true,
+        notifyWebContent: Boolean = false,
+    ) {
         val view = fullscreenVideoView ?: return
+        val callback = fullscreenVideoCallback
         cancelPendingFullscreenOrientation()
         (view.parent as? ViewGroup)?.removeView(view)
         fullscreenVideoView = null
-        fullscreenVideoCallback?.onCustomViewHidden()
         fullscreenVideoCallback = null
         window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+        if (notifyWebContent) {
+            callback?.onCustomViewHidden()
+        }
 
         if (!restoreOrientationAfterDelay) {
             orientationBeforeFullscreen = null
@@ -295,7 +301,7 @@ class MainActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         if (fullscreenVideoView != null) {
-            hideFullscreenVideo()
+            hideFullscreenVideo(notifyWebContent = true)
         } else if (webView.canGoBack()) {
             webView.goBack()
         } else {
