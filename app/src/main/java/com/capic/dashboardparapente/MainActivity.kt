@@ -188,7 +188,6 @@ class MainActivity : Activity() {
                         ViewGroup.LayoutParams.MATCH_PARENT,
                     ),
                 )
-                webView.visibility = View.GONE
                 loadingIndicator.visibility = View.GONE
                 window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
                 view.post {
@@ -241,7 +240,6 @@ class MainActivity : Activity() {
         fullscreenVideoView = null
         fullscreenVideoCallback?.onCustomViewHidden()
         fullscreenVideoCallback = null
-        webView.visibility = View.VISIBLE
         window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
 
         if (!restoreOrientationAfterDelay) {
