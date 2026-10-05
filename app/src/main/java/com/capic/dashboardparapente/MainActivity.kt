@@ -2,15 +2,11 @@ package com.capic.dashboardparapente
 
 import android.app.Activity
 import android.content.Intent
-import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
-import android.content.res.Configuration
-import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.os.SystemClock
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -23,7 +19,6 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import android.widget.ProgressBar
-import android.widget.TextView
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import java.util.Locale
 
@@ -33,15 +28,9 @@ class MainActivity : Activity() {
     private lateinit var swipeRefreshLayout: SwipeRefreshLayout
     private var fullscreenVideoView: View? = null
     private var fullscreenVideoCallback: WebChromeClient.CustomViewCallback? = null
-    private var orientationBeforeFullscreen: Int? = null
+    private var fullscreenUiVisibilityBefore: Int? = null
     private val mainHandler = Handler(Looper.getMainLooper())
-    private var pendingOrientationRestore: Runnable? = null
-    private var pendingFullscreenOrientation: Runnable? = null
-    private var fullscreenTraceView: TextView? = null
-    private val fullscreenTraceLines = mutableListOf<String>()
-    private val hideFullscreenTrace = Runnable {
-        fullscreenTraceView?.visibility = View.GONE
-    }
+    private var pendingLandscapePresentation: Runnable? = null
     private var touchInProgress = false
     private var pendingGeolocationCallback: GeolocationPermissions.Callback? = null
     private var pendingGeolocationOrigin: String? = null
@@ -171,20 +160,22 @@ class MainActivity : Activity() {
             }
 
             override fun onShowCustomView(view: View, callback: CustomViewCallback) {
-                traceFullscreen("SHOW_CUSTOM_VIEW")
                 if (fullscreenVideoView != null) {
-                    traceFullscreen("REJECT_SECOND_VIEW")
                     callback.onCustomViewHidden()
                     return
                 }
 
-                cancelPendingOrientationRestore()
-                if (orientationBeforeFullscreen == null) {
-                    orientationBeforeFullscreen = requestedOrientation
-                }
                 fullscreenVideoView = view
                 fullscreenVideoCallback = callback
+                fullscreenUiVisibilityBefore = window.decorView.systemUiVisibility
                 window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+                window.decorView.systemUiVisibility =
+                    View.SYSTEM_UI_FLAG_FULLSCREEN or
+                        View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                        View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+                        View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+                        View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                        View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
                 window.addContentView(
                     view,
                     FrameLayout.LayoutParams(
@@ -193,13 +184,11 @@ class MainActivity : Activity() {
                         Gravity.CENTER,
                     ),
                 )
-                traceFullscreen("VIEW_ATTACHED")
                 loadingIndicator.visibility = View.GONE
-                scheduleFullscreenOrientation(view)
+                scheduleLandscapePresentation(view)
             }
 
             override fun onHideCustomView() {
-                traceFullscreen("HIDE_CUSTOM_VIEW")
                 hideFullscreenVideo()
             }
         }
@@ -236,125 +225,66 @@ class MainActivity : Activity() {
         false
     }
 
-    private fun hideFullscreenVideo(
-        restoreOrientationAfterDelay: Boolean = true,
-        notifyWebContent: Boolean = false,
-    ) {
+    private fun hideFullscreenVideo(notifyWebContent: Boolean = false) {
         val view = fullscreenVideoView ?: return
         val callback = fullscreenVideoCallback
-        cancelPendingFullscreenOrientation()
+        cancelPendingLandscapePresentation()
+        view.rotation = 0f
+        (view.layoutParams as? FrameLayout.LayoutParams)?.let { layoutParams ->
+            layoutParams.width = ViewGroup.LayoutParams.MATCH_PARENT
+            layoutParams.height = ViewGroup.LayoutParams.MATCH_PARENT
+            layoutParams.gravity = Gravity.CENTER
+            view.layoutParams = layoutParams
+        }
         (view.parent as? ViewGroup)?.removeView(view)
         fullscreenVideoView = null
         fullscreenVideoCallback = null
         window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+        fullscreenUiVisibilityBefore?.let { previousVisibility ->
+            window.decorView.systemUiVisibility = previousVisibility
+        }
+        fullscreenUiVisibilityBefore = null
         if (notifyWebContent) {
             callback?.onCustomViewHidden()
         }
-
-        if (!restoreOrientationAfterDelay) {
-            orientationBeforeFullscreen = null
-            return
-        }
-
-        scheduleOrientationRestore()
     }
 
-    private fun prepareFullscreenOrientation() {
-        cancelPendingFullscreenOrientation()
-        cancelPendingOrientationRestore()
-        if (orientationBeforeFullscreen == null) {
-            orientationBeforeFullscreen = requestedOrientation
-        }
-        traceFullscreen("REQUEST_LANDSCAPE")
-        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-    }
+    private fun scheduleLandscapePresentation(view: View) {
+        cancelPendingLandscapePresentation()
+        val presentLandscape = object : Runnable {
+            override fun run() {
+                if (pendingLandscapePresentation !== this) return
+                val parent = view.parent as? ViewGroup ?: return
+                val parentWidth = parent.width
+                val parentHeight = parent.height
+                if (parentWidth <= 0 || parentHeight <= 0) {
+                    mainHandler.postDelayed(this, LANDSCAPE_LAYOUT_RETRY_DELAY_MS)
+                    return
+                }
+                if (fullscreenVideoView !== view) return
 
-    private fun scheduleFullscreenOrientation(view: View) {
-        cancelPendingFullscreenOrientation()
-        val requestOrientation = Runnable {
-            pendingFullscreenOrientation = null
-            if (fullscreenVideoView === view) {
-                traceFullscreen("ORIENTATION_DELAY_ELAPSED")
-                prepareFullscreenOrientation()
+                val layoutParams = view.layoutParams as? FrameLayout.LayoutParams
+                    ?: FrameLayout.LayoutParams(parentHeight, parentWidth)
+                layoutParams.width = parentHeight
+                layoutParams.height = parentWidth
+                layoutParams.gravity = Gravity.CENTER
+                view.layoutParams = layoutParams
+                view.pivotX = parentHeight / 2f
+                view.pivotY = parentWidth / 2f
+                view.rotation = LANDSCAPE_VIEW_ROTATION_DEGREES
             }
         }
-        pendingFullscreenOrientation = requestOrientation
+        pendingLandscapePresentation = presentLandscape
         view.post {
-            if (pendingFullscreenOrientation === requestOrientation) {
-                mainHandler.postDelayed(requestOrientation, FULLSCREEN_ORIENTATION_DELAY_MS)
+            view.postOnAnimation {
+                view.postOnAnimation { presentLandscape.run() }
             }
         }
     }
 
-    private fun cancelPendingFullscreenOrientation() {
-        pendingFullscreenOrientation?.let(mainHandler::removeCallbacks)
-        pendingFullscreenOrientation = null
-    }
-
-    private fun scheduleOrientationRestore() {
-        val orientationToRestore = orientationBeforeFullscreen ?: return
-        val restoreOrientation = Runnable {
-            pendingOrientationRestore = null
-            if (fullscreenVideoView == null) {
-                traceFullscreen("RESTORE_ORIENTATION")
-                requestedOrientation = orientationToRestore
-                orientationBeforeFullscreen = null
-            }
-        }
-        pendingOrientationRestore = restoreOrientation
-        mainHandler.postDelayed(restoreOrientation, ORIENTATION_RESTORE_DELAY_MS)
-    }
-
-    private fun cancelPendingOrientationRestore() {
-        pendingOrientationRestore?.let(mainHandler::removeCallbacks)
-        pendingOrientationRestore = null
-    }
-
-    override fun onConfigurationChanged(newConfig: Configuration) {
-        super.onConfigurationChanged(newConfig)
-        val orientation = when (newConfig.orientation) {
-            Configuration.ORIENTATION_LANDSCAPE -> "LANDSCAPE"
-            Configuration.ORIENTATION_PORTRAIT -> "PORTRAIT"
-            else -> "UNKNOWN"
-        }
-        traceFullscreen("CONFIG_$orientation")
-    }
-
-    private fun traceFullscreen(event: String) {
-        val orientation =
-            if (resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) {
-                "landscape"
-            } else {
-                "portrait"
-            }
-        val entry =
-            "${SystemClock.elapsedRealtime()}: $event / $orientation / " +
-                "requested=$requestedOrientation / custom=${fullscreenVideoView != null}"
-        fullscreenTraceLines += entry
-        if (fullscreenTraceLines.size > 8) fullscreenTraceLines.removeAt(0)
-
-        val traceView = fullscreenTraceView ?: TextView(this).apply {
-            setTextColor(Color.WHITE)
-            textSize = 10f
-            setBackgroundColor(Color.argb(220, 10, 18, 32))
-            setPadding(10, 8, 10, 8)
-            isClickable = false
-        }.also {
-            fullscreenTraceView = it
-            window.addContentView(
-                it,
-                FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    Gravity.TOP,
-                ),
-            )
-        }
-        traceView.text = "Diagnostic plein écran\n${fullscreenTraceLines.joinToString("\n")}"
-        traceView.visibility = View.VISIBLE
-        traceView.bringToFront()
-        mainHandler.removeCallbacks(hideFullscreenTrace)
-        mainHandler.postDelayed(hideFullscreenTrace, FULLSCREEN_TRACE_VISIBLE_MS)
+    private fun cancelPendingLandscapePresentation() {
+        pendingLandscapePresentation?.let(mainHandler::removeCallbacks)
+        pendingLandscapePresentation = null
     }
 
     private fun openExternalUrl(url: Uri) {
@@ -378,10 +308,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
-        cancelPendingFullscreenOrientation()
-        cancelPendingOrientationRestore()
-        hideFullscreenVideo(restoreOrientationAfterDelay = false)
-        orientationBeforeFullscreen = null
+        hideFullscreenVideo()
         webView.destroy()
         super.onDestroy()
     }
@@ -390,9 +317,8 @@ class MainActivity : Activity() {
         const val DASHBOARD_URL = "https://parapente.capic.ignorelist.com"
         const val DASHBOARD_HOST = "parapente.capic.ignorelist.com"
         const val LOCATION_PERMISSION_REQUEST_CODE = 1001
-        const val FULLSCREEN_ORIENTATION_DELAY_MS = 250L
-        const val FULLSCREEN_TRACE_VISIBLE_MS = 15000L
-        const val ORIENTATION_RESTORE_DELAY_MS = 800L
+        const val LANDSCAPE_VIEW_ROTATION_DEGREES = 90f
+        const val LANDSCAPE_LAYOUT_RETRY_DELAY_MS = 16L
         const val NESTED_SCROLL_TARGET_SCRIPT = """
             (function(x, y) {
                 let element = document.elementFromPoint(x, y);
