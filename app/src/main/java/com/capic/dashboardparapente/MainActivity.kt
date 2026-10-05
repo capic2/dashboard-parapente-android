@@ -166,7 +166,6 @@ class MainActivity : Activity() {
                 fullscreenVideoView = view
                 fullscreenVideoCallback = callback
                 orientationBeforeFullscreen = requestedOrientation
-                requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
                 rootView.addView(
                     view,
                     FrameLayout.LayoutParams(
@@ -177,6 +176,11 @@ class MainActivity : Activity() {
                 webView.visibility = View.GONE
                 loadingIndicator.visibility = View.GONE
                 window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+                view.post {
+                    if (fullscreenVideoView === view) {
+                        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                    }
+                }
             }
 
             override fun onHideCustomView() {
@@ -261,6 +265,7 @@ class MainActivity : Activity() {
             (function(x, y) {
                 let element = document.elementFromPoint(x, y);
                 while (element && element !== document.body && element !== document.documentElement) {
+                    if (/(iframe|video|audio)/.test(element.tagName.toLowerCase())) return "nested";
                     const style = window.getComputedStyle(element);
                     const scrollable = element.scrollHeight > element.clientHeight + 1 &&
                         /(auto|scroll|overlay)/.test(style.overflowY);
