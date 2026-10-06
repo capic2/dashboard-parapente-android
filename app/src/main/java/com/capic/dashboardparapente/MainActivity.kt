@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.net.Uri
 import android.os.Bundle
+import android.util.Base64
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -22,7 +23,10 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import android.widget.ProgressBar
+import android.widget.Toast
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.util.Locale
 
 class MainActivity : Activity() {
@@ -40,6 +44,7 @@ class MainActivity : Activity() {
     private var pendingGeolocationCallback: GeolocationPermissions.Callback? = null
     private var pendingGeolocationOrigin: String? = null
     private var pendingFileChooserCallback: ValueCallback<Array<Uri>>? = null
+    private var pendingSharedGpx: SharedGpx? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -84,12 +89,19 @@ class MainActivity : Activity() {
             false
         }
         configureWebView()
+        handleIncomingGpx(intent)
 
         if (savedInstanceState == null) {
             webView.loadUrl(DASHBOARD_URL)
         } else {
             webView.restoreState(savedInstanceState)
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIncomingGpx(intent)
     }
 
     @Suppress("SetJavaScriptEnabled")
@@ -105,6 +117,7 @@ class MainActivity : Activity() {
         CookieManager.getInstance().setAcceptCookie(true)
         webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
         webView.addJavascriptInterface(NativeFullscreenBridge(), NATIVE_FULLSCREEN_BRIDGE_NAME)
+        webView.addJavascriptInterface(NativeGpxShareBridge(), NATIVE_GPX_SHARE_BRIDGE_NAME)
 
         webView.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView, url: String) {
@@ -218,6 +231,68 @@ class MainActivity : Activity() {
                 hideFullscreenVideo()
             }
         }
+    }
+
+    private fun handleIncomingGpx(intent: Intent?) {
+        if (
+            intent == null ||
+            (intent.action != Intent.ACTION_SEND && intent.action != Intent.ACTION_VIEW)
+        ) {
+            return
+        }
+
+        val uri = if (intent.action == Intent.ACTION_SEND) {
+            @Suppress("DEPRECATION")
+            (intent.getParcelableExtra(Intent.EXTRA_STREAM) as? Uri)
+                ?: intent.clipData?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.uri
+        } else {
+            intent.data
+        } ?: run {
+            Toast.makeText(this, R.string.gpx_share_read_error, Toast.LENGTH_LONG).show()
+            return
+        }
+
+        try {
+            val filename = queryDisplayName(uri) ?: uri.lastPathSegment ?: "trace.gpx"
+            if (!filename.endsWith(".gpx", ignoreCase = true)) {
+                Toast.makeText(this, R.string.gpx_share_invalid_file, Toast.LENGTH_LONG).show()
+                return
+            }
+
+            val bytes = contentResolver.openInputStream(uri)?.use { input ->
+                val output = ByteArrayOutputStream()
+                val buffer = ByteArray(8 * 1024)
+                var total = 0
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    total += count
+                    require(total <= MAX_SHARED_GPX_BYTES) { "GPX file is too large" }
+                    output.write(buffer, 0, count)
+                }
+                output.toByteArray()
+            } ?: throw IllegalArgumentException("Cannot read shared file")
+
+            if (bytes.isEmpty()) throw IllegalArgumentException("Empty GPX file")
+            synchronized(this) {
+                pendingSharedGpx = SharedGpx(
+                    filename = filename.substringAfterLast('/'),
+                    base64 = Base64.encodeToString(bytes, Base64.NO_WRAP),
+                )
+            }
+            Toast.makeText(this, R.string.gpx_share_received, Toast.LENGTH_SHORT).show()
+        } catch (_: Exception) {
+            Toast.makeText(this, R.string.gpx_share_read_error, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun queryDisplayName(uri: Uri): String? = try {
+        contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)
+            ?.use { cursor ->
+                if (cursor.moveToFirst()) cursor.getString(0) else null
+            }
+    } catch (_: Exception) {
+        null
     }
 
     @Deprecated("Deprecated in Java")
@@ -369,6 +444,23 @@ class MainActivity : Activity() {
         }
     }
 
+    inner class NativeGpxShareBridge {
+        @JavascriptInterface
+        fun consumeSharedGpx(): String? {
+            if (!isDashboardPageLoaded()) return null
+            return synchronized(this@MainActivity) {
+                val shared = pendingSharedGpx ?: return@synchronized null
+                pendingSharedGpx = null
+                JSONObject()
+                    .put("filename", shared.filename)
+                    .put("base64", shared.base64)
+                    .toString()
+            }
+        }
+    }
+
+    private data class SharedGpx(val filename: String, val base64: String)
+
     private fun openExternalUrl(url: Uri) {
         startActivity(Intent(Intent.ACTION_VIEW, url))
     }
@@ -405,6 +497,8 @@ class MainActivity : Activity() {
         const val DASHBOARD_URL = "https://parapente.capic.ignorelist.com"
         const val DASHBOARD_HOST = "parapente.capic.ignorelist.com"
         const val NATIVE_FULLSCREEN_BRIDGE_NAME = "NativeFullscreen"
+        const val NATIVE_GPX_SHARE_BRIDGE_NAME = "NativeGpxShare"
+        const val MAX_SHARED_GPX_BYTES = 20 * 1024 * 1024
         const val LOCATION_PERMISSION_REQUEST_CODE = 1001
         const val FILE_CHOOSER_REQUEST_CODE = 1002
         const val NESTED_SCROLL_TARGET_SCRIPT = """
