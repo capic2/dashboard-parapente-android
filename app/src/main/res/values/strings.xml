@@ -2,4 +2,7 @@
 <resources>
     <string name="app_name">Dashboard Parapente</string>
     <string name="dashboard_content_description">Tableau de bord parapente</string>
+    <string name="gpx_share_received">GPX reçu : recherche du vol correspondant…</string>
+    <string name="gpx_share_invalid_file">Le fichier partagé n’est pas un GPX.</string>
+    <string name="gpx_share_read_error">Impossible de lire le fichier GPX partagé.</string>
 </resources>
