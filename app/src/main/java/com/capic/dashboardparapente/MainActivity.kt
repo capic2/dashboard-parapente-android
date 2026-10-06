@@ -1,6 +1,7 @@
 package com.capic.dashboardparapente
 
 import android.app.Activity
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
@@ -14,6 +15,7 @@ import android.view.WindowManager
 import android.webkit.CookieManager
 import android.webkit.GeolocationPermissions
 import android.webkit.JavascriptInterface
+import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
@@ -37,6 +39,7 @@ class MainActivity : Activity() {
     private var touchInProgress = false
     private var pendingGeolocationCallback: GeolocationPermissions.Callback? = null
     private var pendingGeolocationOrigin: String? = null
+    private var pendingFileChooserCallback: ValueCallback<Array<Uri>>? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -135,6 +138,26 @@ class MainActivity : Activity() {
                 loadingIndicator.visibility = if (newProgress == 100) View.GONE else View.VISIBLE
             }
 
+            override fun onShowFileChooser(
+                webView: WebView,
+                filePathCallback: ValueCallback<Array<Uri>>,
+                fileChooserParams: FileChooserParams,
+            ): Boolean {
+                pendingFileChooserCallback?.onReceiveValue(null)
+                pendingFileChooserCallback = filePathCallback
+                return try {
+                    startActivityForResult(
+                        fileChooserParams.createIntent(),
+                        FILE_CHOOSER_REQUEST_CODE,
+                    )
+                    true
+                } catch (_: ActivityNotFoundException) {
+                    pendingFileChooserCallback = null
+                    filePathCallback.onReceiveValue(null)
+                    false
+                }
+            }
+
             override fun onGeolocationPermissionsShowPrompt(
                 origin: String,
                 callback: GeolocationPermissions.Callback,
@@ -213,6 +236,22 @@ class MainActivity : Activity() {
         if (origin != null && callback != null) {
             callback.invoke(origin, hasLocationPermission(), false)
         }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != FILE_CHOOSER_REQUEST_CODE) return
+
+        val callback = pendingFileChooserCallback ?: return
+        pendingFileChooserCallback = null
+        callback.onReceiveValue(
+            if (resultCode == RESULT_OK) {
+                WebChromeClient.FileChooserParams.parseResult(resultCode, data)
+            } else {
+                null
+            },
+        )
     }
 
     private fun hasLocationPermission(): Boolean =
@@ -367,6 +406,7 @@ class MainActivity : Activity() {
         const val DASHBOARD_HOST = "parapente.capic.ignorelist.com"
         const val NATIVE_FULLSCREEN_BRIDGE_NAME = "NativeFullscreen"
         const val LOCATION_PERMISSION_REQUEST_CODE = 1001
+        const val FILE_CHOOSER_REQUEST_CODE = 1002
         const val NESTED_SCROLL_TARGET_SCRIPT = """
             (function(x, y) {
                 let element = document.elementFromPoint(x, y);
