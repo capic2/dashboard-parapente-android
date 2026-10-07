@@ -89,9 +89,9 @@ class MainActivity : Activity() {
             false
         }
         configureWebView()
-        handleIncomingGpx(intent)
+        val hasIncomingGpx = handleIncomingGpx(intent)
 
-        if (savedInstanceState == null) {
+        if (savedInstanceState == null || hasIncomingGpx) {
             webView.loadUrl(DASHBOARD_URL)
         } else {
             webView.restoreState(savedInstanceState)
@@ -101,7 +101,9 @@ class MainActivity : Activity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        handleIncomingGpx(intent)
+        if (handleIncomingGpx(intent) && isDashboardPageLoaded()) {
+            webView.reload()
+        }
     }
 
     @Suppress("SetJavaScriptEnabled")
@@ -233,12 +235,12 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun handleIncomingGpx(intent: Intent?) {
+    private fun handleIncomingGpx(intent: Intent?): Boolean {
         if (
             intent == null ||
             (intent.action != Intent.ACTION_SEND && intent.action != Intent.ACTION_VIEW)
         ) {
-            return
+            return false
         }
 
         val uri = if (intent.action == Intent.ACTION_SEND) {
@@ -249,14 +251,14 @@ class MainActivity : Activity() {
             intent.data
         } ?: run {
             Toast.makeText(this, R.string.gpx_share_read_error, Toast.LENGTH_LONG).show()
-            return
+            return false
         }
 
         try {
             val filename = queryDisplayName(uri) ?: uri.lastPathSegment ?: "trace.gpx"
             if (!filename.endsWith(".gpx", ignoreCase = true)) {
                 Toast.makeText(this, R.string.gpx_share_invalid_file, Toast.LENGTH_LONG).show()
-                return
+                return false
             }
 
             val bytes = contentResolver.openInputStream(uri)?.use { input ->
@@ -281,8 +283,10 @@ class MainActivity : Activity() {
                 )
             }
             Toast.makeText(this, R.string.gpx_share_received, Toast.LENGTH_SHORT).show()
+            true
         } catch (_: Exception) {
             Toast.makeText(this, R.string.gpx_share_read_error, Toast.LENGTH_LONG).show()
+            false
         }
     }
 
