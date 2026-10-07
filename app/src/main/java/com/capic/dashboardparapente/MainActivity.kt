@@ -254,7 +254,7 @@ class MainActivity : Activity() {
             return false
         }
 
-        try {
+        return try {
             val filename = queryDisplayName(uri) ?: uri.lastPathSegment ?: "trace.gpx"
             if (!filename.endsWith(".gpx", ignoreCase = true)) {
                 Toast.makeText(this, R.string.gpx_share_invalid_file, Toast.LENGTH_LONG).show()
