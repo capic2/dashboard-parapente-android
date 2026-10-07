@@ -124,6 +124,7 @@ class MainActivity : Activity() {
         webView.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView, url: String) {
                 swipeRefreshLayout.isRefreshing = false
+                exposePendingSharedGpx(view)
             }
 
             override fun onReceivedError(
@@ -297,6 +298,22 @@ class MainActivity : Activity() {
             }
     } catch (_: Exception) {
         null
+    }
+
+    private fun exposePendingSharedGpx(view: WebView) {
+        if (!isDashboardPageLoaded()) return
+
+        val shared = synchronized(this) {
+            val pending = pendingSharedGpx ?: return@synchronized null
+            pendingSharedGpx = null
+            pending
+        } ?: return
+
+        val payload = JSONObject()
+            .put("filename", shared.filename)
+            .put("base64", shared.base64)
+            .toString()
+        view.evaluateJavascript("window.__pendingNativeGpxShare = $payload;", null)
     }
 
     @Deprecated("Deprecated in Java")
