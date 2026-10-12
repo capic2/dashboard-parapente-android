@@ -13,6 +13,7 @@
             android:id="@+id/dashboard_web_view"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
+            android:importantForAutofill="yes"
             android:contentDescription="@string/dashboard_content_description" />
     </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
 
